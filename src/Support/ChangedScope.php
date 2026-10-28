@@ -15,9 +15,14 @@ use PhpParser\Node\Expr\MethodCall;
 use PhpParser\Node\Identifier;
 use PhpParser\Node\Name;
 use PhpParser\Node\Scalar\String_;
+use PhpParser\Node\Stmt\Function_;
+use PhpParser\Node\Stmt\GroupUse;
+use PhpParser\Node\Stmt\Nop;
+use PhpParser\Node\Stmt\Use_;
 use PhpParser\NodeFinder;
 use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitor\NameResolver;
+use PhpParser\PrettyPrinter\Standard;
 use ReflectionClass;
 use Symfony\Component\Finder\SplFileInfo;
 use Symfony\Component\Process\Process;
@@ -110,6 +115,10 @@ class ChangedScope
                 $isDeletedTest = ! file_exists($absolute) && str_ends_with($path, '.php');
 
                 if (! isset($testFiles[$real]) && ! $isDeletedTest) {
+                    if (self::onlyAddsFunctions(self::git($root, ['show', "{$base}:./{$path}"]), $absolute)) {
+                        continue;
+                    }
+
                     return new self($revision, $base, "{$path} changed");
                 }
 
@@ -223,6 +232,41 @@ class ChangedScope
     private static function within(string $path, array $roots): bool
     {
         return array_any($roots, fn (string $root): bool => $path === $root || str_starts_with($path, $root.DIRECTORY_SEPARATOR));
+    }
+
+    /**
+     * Whether a support file such as tests/Pest.php only gained functions or imports, which no unchanged test can use.
+     */
+    private static function onlyAddsFunctions(?string $before, string $path): bool
+    {
+        $after = str_ends_with($path, '.php') && is_file($path) ? file_get_contents($path) : false;
+
+        if ($before === null || $after === false) {
+            return false;
+        }
+
+        try {
+            [$before, $after] = array_map(fn (string $code): array => PhpParserFactory::make()->parse($code) ?? [], [$before, $after]);
+        } catch (Error) {
+            return false;
+        }
+
+        $printer = new Standard;
+        $remaining = array_map(fn (Node $statement): string => $printer->prettyPrint([$statement]), $before);
+
+        foreach ($after as $statement) {
+            if ($remaining !== [] && $printer->prettyPrint([$statement]) === $remaining[0]) {
+                array_shift($remaining);
+
+                continue;
+            }
+
+            if (! $statement instanceof Function_ && ! $statement instanceof Use_ && ! $statement instanceof GroupUse && ! $statement instanceof Nop) {
+                return false;
+            }
+        }
+
+        return $remaining === [];
     }
 
     /**

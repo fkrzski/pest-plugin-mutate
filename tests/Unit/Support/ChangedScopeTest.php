@@ -135,6 +135,15 @@ it('compares against where HEAD forked from the given revision', function (): vo
     expect(($this->files)(($this->scope)('main')))->toBe(['src/Foo.php']);
 });
 
+it('scopes nothing when a support file only gained functions', function (): void {
+    ($this->write)(['tests/Pest.php' => '<?php use App\Ns\Foo; function foo(): Foo { return new Foo; }']);
+
+    $scope = ($this->scope)();
+
+    expect($scope->everythingBecause)->toBeNull()
+        ->and(($this->files)($scope))->toBe([]);
+});
+
 it('mutates everything when a non-test file in the tests path changed', function (): void {
     ($this->write)(['tests/Pest.php' => '<?php pest()->extend(Tests\TestCase::class);']);
 
@@ -156,3 +165,17 @@ it('mutates everything when a changed test file covers something other than a na
 it('fails when the revision shares no history with HEAD', function (): void {
     ($this->scope)('does-not-exist');
 })->throws(InvalidOption::class, 'Mutating changes requires git and a common ancestor of [does-not-exist] and HEAD.');
+
+it('mutates everything when a support file changed what it already declared', function (): void {
+    ($this->commit)(['tests/Pest.php' => '<?php function foo(): int { return 1; }']);
+    ($this->write)(['tests/Pest.php' => '<?php function foo(): int { return 2; } function bar(): int { return 3; }']);
+
+    expect(($this->scope)()->everythingBecause)->toBe('tests/Pest.php changed');
+});
+
+it('mutates everything when a non-php file in the tests path changed', function (): void {
+    ($this->commit)(['tests/Fixtures/answer.json' => '{}']);
+    ($this->write)(['tests/Fixtures/answer.json' => '{"changed": true}']);
+
+    expect(($this->scope)()->everythingBecause)->toBe('tests/Fixtures/answer.json changed');
+});
